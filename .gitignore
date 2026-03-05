@@ -1,0 +1,26 @@
+# Bicep
+*.json
+!parameters/*.json
+
+# Azure
+.azure/
+azuredeploy.parameters.local.json
+
+# Secrets
+.env
+*.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Terraform (in case of future migration)
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfplan
