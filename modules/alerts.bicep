@@ -6,7 +6,6 @@ param appInsightsId string
 param functionAppUrl string = ''
 
 var actionGroupName = '${namePrefix}-devin-alerts'
-var alertRuleName = '${namePrefix}-payment-error-spike'
 
 // Action group — webhook to Azure Function that triggers Devin API
 resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
@@ -32,42 +31,7 @@ resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
   }
 }
 
-// Metric alert — fires when Payment Service error rate spikes
-resource paymentErrorAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = {
-  name: alertRuleName
-  location: 'global'
-  properties: {
-    description: 'Fires when the Payment Service error rate exceeds threshold, triggering Devin API investigation'
-    severity: 1
-    enabled: true
-    scopes: [
-      appInsightsId
-    ]
-    evaluationFrequency: 'PT1M'
-    windowSize: 'PT5M'
-    criteria: {
-      'odata.type': 'Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria'
-      allOf: [
-        {
-          name: 'payment-errors'
-          metricName: 'exceptions/count'
-          metricNamespace: 'microsoft.insights/components'
-          operator: 'GreaterThan'
-          threshold: 3
-          timeAggregation: 'Count'
-          criterionType: 'StaticThresholdCriterion'
-        }
-      ]
-    }
-    actions: [
-      {
-        actionGroupId: actionGroup.id
-      }
-    ]
-  }
-}
-
-// Log-based alert — fires on specific Payment Service ValueError exceptions
+// Log-based alert — fires on Payment Service ValueError exceptions
 resource paymentCrashAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
   name: '${namePrefix}-payment-crash-log-alert'
   location: location
@@ -78,18 +42,13 @@ resource paymentCrashAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' =
     scopes: [
       appInsightsId
     ]
-    evaluationFrequency: 'PT1M'
+    evaluationFrequency: 'PT5M'
     windowSize: 'PT5M'
+    skipQueryValidation: true
     criteria: {
       allOf: [
         {
-          query: '''
-            exceptions
-            | where cloud_RoleName == "eventflow-payment-service"
-            | where type == "ValueError"
-            | where outerMessage contains "below minimum threshold"
-            | summarize count() by bin(timestamp, 1m)
-          '''
+          query: 'exceptions | where cloud_RoleName contains "ef-payment" | where type == "ValueError" | where outerMessage contains "below minimum threshold"'
           timeAggregation: 'Count'
           operator: 'GreaterThan'
           threshold: 1
@@ -111,5 +70,5 @@ resource paymentCrashAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' =
 @description('Action group ID')
 output actionGroupId string = actionGroup.id
 
-@description('Metric alert ID')
-output metricAlertId string = paymentErrorAlert.id
+@description('Log alert ID')
+output logAlertId string = paymentCrashAlert.id

@@ -48,3 +48,6 @@ output appInsightsInstrumentationKey string = appInsights.properties.Instrumenta
 
 @description('Log Analytics Workspace name')
 output workspaceName string = logAnalytics.name
+
+@description('Application Insights resource ID')
+output appInsightsId string = appInsights.id

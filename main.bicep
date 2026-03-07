@@ -1,4 +1,5 @@
-@description('EventFlow Demo — Event-driven Azure stack with observability and Devin AI integration')
+// EventFlow Demo — Event-driven Azure stack with observability and Devin AI integration
+// Supports 10 parallel team deployments, each with their own subdomains
 
 targetScope = 'resourceGroup'
 
@@ -11,6 +12,14 @@ param namePrefix string = 'eventflow'
 @description('Name of the Service Bus queue for order events')
 param serviceBusQueueName string = 'order-events'
 
+@description('Number of team environments to deploy (1-10)')
+@minValue(1)
+@maxValue(10)
+param teamCount int = 10
+
+@description('Deploy the Azure Function App for Devin API trigger (requires Dynamic VM quota)')
+param deployFunctionApp bool = false
+
 // ─── Container Registry ─────────────────────────────────────────────────────
 module acr 'modules/container-registry.bicep' = {
   name: 'deploy-acr'
@@ -20,17 +29,18 @@ module acr 'modules/container-registry.bicep' = {
   }
 }
 
-// ─── Service Bus ─────────────────────────────────────────────────────────────
+// ─── Service Bus (shared namespace, per-team queues) ────────────────────────
 module serviceBus 'modules/service-bus.bicep' = {
   name: 'deploy-servicebus'
   params: {
     location: location
     namePrefix: namePrefix
     queueName: serviceBusQueueName
+    teamCount: teamCount
   }
 }
 
-// ─── Monitoring (Log Analytics + Application Insights) ───────────────────────
+// ─── Monitoring (Log Analytics + Application Insights — shared) ─────────────
 module monitoring 'modules/monitoring.bicep' = {
   name: 'deploy-monitoring'
   params: {
@@ -39,23 +49,33 @@ module monitoring 'modules/monitoring.bicep' = {
   }
 }
 
-// ─── Container Apps (Order Service + Payment Service) ────────────────────────
-module containerApps 'modules/container-apps.bicep' = {
-  name: 'deploy-container-apps'
+// ─── Container Apps Environment (shared) ────────────────────────────────────
+module containerAppsEnv 'modules/container-apps-env.bicep' = {
+  name: 'deploy-container-apps-env'
   params: {
     location: location
     namePrefix: namePrefix
     logAnalyticsWorkspaceId: monitoring.outputs.workspaceId
-    acrLoginServer: acr.outputs.loginServer
-    acrName: acr.outputs.name
-    serviceBusConnectionString: serviceBus.outputs.connectionString
-    serviceBusQueueName: serviceBus.outputs.queueName
-    appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
   }
 }
 
-// ─── Azure Function (Alert Webhook → Devin API) ─────────────────────────────
-module functionApp 'modules/function-app.bicep' = {
+// ─── Per-Team Container Apps (team1 through team10) ─────────────────────────
+module teamApps 'modules/team-apps.bicep' = [for i in range(1, teamCount): {
+  name: 'deploy-team${i}'
+  params: {
+    location: location
+    teamNumber: i
+    environmentId: containerAppsEnv.outputs.environmentId
+    acrLoginServer: acr.outputs.loginServer
+    acrName: acr.outputs.name
+    serviceBusConnectionString: serviceBus.outputs.connectionString
+    serviceBusQueueName: '${serviceBusQueueName}-team${i}'
+    appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
+  }
+}]
+
+// ─── Azure Function (Alert Webhook → Devin API) — optional ─────────────────
+module functionApp 'modules/function-app.bicep' = if (deployFunctionApp) {
   name: 'deploy-function-app'
   params: {
     location: location
@@ -71,8 +91,8 @@ module alerts 'modules/alerts.bicep' = {
   params: {
     location: location
     namePrefix: namePrefix
-    appInsightsId: monitoring.outputs.workspaceId
-    functionAppUrl: functionApp.outputs.functionAppUrl
+    appInsightsId: monitoring.outputs.appInsightsId
+    functionAppUrl: deployFunctionApp ? functionApp.outputs.functionAppUrl : ''
   }
 }
 
@@ -80,12 +100,6 @@ module alerts 'modules/alerts.bicep' = {
 
 @description('Container Registry login server')
 output acrLoginServer string = acr.outputs.loginServer
-
-@description('Order Service URL')
-output orderServiceUrl string = 'https://${containerApps.outputs.orderServiceFqdn}'
-
-@description('Payment Service URL')
-output paymentServiceUrl string = 'https://${containerApps.outputs.paymentServiceFqdn}'
 
 @description('Application Insights connection string')
 output appInsightsConnectionString string = monitoring.outputs.appInsightsConnectionString
@@ -97,4 +111,16 @@ output logAnalyticsWorkspaceName string = monitoring.outputs.workspaceName
 output serviceBusConnectionString string = serviceBus.outputs.connectionString
 
 @description('Devin trigger Function App URL')
-output devinTriggerUrl string = functionApp.outputs.functionAppUrl
+output devinTriggerUrl string = deployFunctionApp ? functionApp.outputs.functionAppUrl : 'not-deployed'
+
+@description('Team Order Service URLs')
+output teamOrderServiceUrls array = [for i in range(1, teamCount): {
+  team: 'team${i}'
+  url: 'https://${teamApps[i - 1].outputs.orderServiceFqdn}'
+}]
+
+@description('Team Payment Service URLs')
+output teamPaymentServiceUrls array = [for i in range(1, teamCount): {
+  team: 'team${i}'
+  url: 'https://${teamApps[i - 1].outputs.paymentServiceFqdn}'
+}]
