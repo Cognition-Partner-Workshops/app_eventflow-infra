@@ -1,48 +1,27 @@
-@description('Container Apps Environment + Order Service + Payment Service')
+@description('Per-team Container Apps deployment (Order Service + Payment Service)')
 
 param location string
-param namePrefix string
-param logAnalyticsWorkspaceId string
+param teamNumber int
+param environmentId string
 param acrLoginServer string
 param acrName string
 param serviceBusConnectionString string
 param serviceBusQueueName string
 param appInsightsConnectionString string
 
-var environmentName = '${namePrefix}-cae'
-
-// Container Apps Environment — Consumption plan (serverless, pay-per-request)
-resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2023-05-01' = {
-  name: environmentName
-  location: location
-  properties: {
-    appLogsConfiguration: {
-      destination: 'log-analytics'
-      logAnalyticsConfiguration: {
-        customerId: reference(logAnalyticsWorkspaceId, '2022-10-01').customerId
-        sharedKey: listKeys(logAnalyticsWorkspaceId, '2022-10-01').primarySharedKey
-      }
-    }
-    workloadProfiles: [
-      {
-        name: 'Consumption'
-        workloadProfileType: 'Consumption'
-      }
-    ]
-  }
-}
+var teamSuffix = 'team${teamNumber}'
 
 // Reference to ACR for pulling images
 resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
   name: acrName
 }
 
-// Order Service — System 1
+// Order Service — System 1 (per team)
 resource orderService 'Microsoft.App/containerApps@2023-05-01' = {
-  name: 'eventflow-order-service'
+  name: 'ef-order-${teamSuffix}'
   location: location
   properties: {
-    managedEnvironmentId: containerAppsEnvironment.id
+    managedEnvironmentId: environmentId
     configuration: {
       activeRevisionsMode: 'Single'
       ingress: {
@@ -103,6 +82,10 @@ resource orderService 'Microsoft.App/containerApps@2023-05-01' = {
               name: 'LOG_LEVEL'
               value: 'INFO'
             }
+            {
+              name: 'TEAM_ID'
+              value: teamSuffix
+            }
           ]
           probes: [
             {
@@ -112,6 +95,7 @@ resource orderService 'Microsoft.App/containerApps@2023-05-01' = {
                 port: 8001
               }
               periodSeconds: 30
+              timeoutSeconds: 5
             }
             {
               type: 'Readiness'
@@ -128,7 +112,7 @@ resource orderService 'Microsoft.App/containerApps@2023-05-01' = {
         }
       ]
       scale: {
-        minReplicas: 0 // Scale to zero when idle — cost optimization
+        minReplicas: 0
         maxReplicas: 2
         rules: [
           {
@@ -145,12 +129,12 @@ resource orderService 'Microsoft.App/containerApps@2023-05-01' = {
   }
 }
 
-// Payment Service — System 2
+// Payment Service — System 2 (per team, contains the bug)
 resource paymentService 'Microsoft.App/containerApps@2023-05-01' = {
-  name: 'eventflow-payment-service'
+  name: 'ef-payment-${teamSuffix}'
   location: location
   properties: {
-    managedEnvironmentId: containerAppsEnvironment.id
+    managedEnvironmentId: environmentId
     configuration: {
       activeRevisionsMode: 'Single'
       ingress: {
@@ -211,6 +195,10 @@ resource paymentService 'Microsoft.App/containerApps@2023-05-01' = {
               name: 'LOG_LEVEL'
               value: 'INFO'
             }
+            {
+              name: 'TEAM_ID'
+              value: teamSuffix
+            }
           ]
           probes: [
             {
@@ -220,6 +208,7 @@ resource paymentService 'Microsoft.App/containerApps@2023-05-01' = {
                 port: 8002
               }
               periodSeconds: 30
+              timeoutSeconds: 5
             }
             {
               type: 'Readiness'
@@ -236,36 +225,15 @@ resource paymentService 'Microsoft.App/containerApps@2023-05-01' = {
         }
       ]
       scale: {
-        minReplicas: 1 // Keep at least 1 replica to consume Service Bus messages
+        minReplicas: 1
         maxReplicas: 2
-        rules: [
-          {
-            name: 'servicebus-rule'
-            custom: {
-              type: 'azure-servicebus'
-              metadata: {
-                queueName: serviceBusQueueName
-                messageCount: '5'
-              }
-              auth: [
-                {
-                  secretRef: 'servicebus-connection'
-                  triggerParameter: 'connection'
-                }
-              ]
-            }
-          }
-        ]
       }
     }
   }
 }
 
-@description('Order Service FQDN')
+@description('Order Service FQDN for this team')
 output orderServiceFqdn string = orderService.properties.configuration.ingress.fqdn
 
-@description('Payment Service FQDN')
+@description('Payment Service FQDN for this team')
 output paymentServiceFqdn string = paymentService.properties.configuration.ingress.fqdn
-
-@description('Container Apps Environment ID')
-output environmentId string = containerAppsEnvironment.id

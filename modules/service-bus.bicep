@@ -1,8 +1,9 @@
-@description('Azure Service Bus — Basic tier for event-driven messaging')
+@description('Azure Service Bus — Basic tier for event-driven messaging with per-team queues')
 
 param location string
 param namePrefix string
 param queueName string = 'order-events'
+param teamCount int = 10
 
 var namespaceName = '${namePrefix}-sbns'
 
@@ -16,9 +17,10 @@ resource serviceBusNamespace 'Microsoft.ServiceBus/namespaces@2022-10-01-preview
   properties: {}
 }
 
-resource queue 'Microsoft.ServiceBus/namespaces/queues@2022-10-01-preview' = {
+// Per-team queues (order-events-team1 through order-events-team10)
+resource queues 'Microsoft.ServiceBus/namespaces/queues@2022-10-01-preview' = [for i in range(1, teamCount): {
   parent: serviceBusNamespace
-  name: queueName
+  name: '${queueName}-team${i}'
   properties: {
     lockDuration: 'PT1M'
     maxSizeInMegabytes: 1024
@@ -26,7 +28,7 @@ resource queue 'Microsoft.ServiceBus/namespaces/queues@2022-10-01-preview' = {
     deadLetteringOnMessageExpiration: true
     maxDeliveryCount: 5
   }
-}
+}]
 
 // Shared access policy for the services
 resource sendListenPolicy 'Microsoft.ServiceBus/namespaces/AuthorizationRules@2022-10-01-preview' = {
@@ -46,5 +48,5 @@ output connectionString string = listKeys(sendListenPolicy.id, sendListenPolicy.
 @description('The namespace name')
 output namespaceName string = serviceBusNamespace.name
 
-@description('The queue name')
-output queueName string = queue.name
+@description('Base queue name prefix (append -teamN for per-team queues)')
+output queueNamePrefix string = queueName
